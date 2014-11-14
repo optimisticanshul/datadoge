@@ -22,15 +22,38 @@ module Datadoge
         host = "host:#{ENV['INSTRUMENTATION_HOSTNAME']}"
         status = event.payload[:status]
         tags = [controller, action, format, host]
-        ActiveSupport::Notifications.instrument :performance, :action => :timing, :tags => tags, :measurement => "request.total_duration", :value => event.duration
-        ActiveSupport::Notifications.instrument :performance, :action => :timing, :tags => tags,  :measurement => "database.query.time", :value => event.payload[:db_runtime]
-        ActiveSupport::Notifications.instrument :performance, :action => :timing, :tags => tags,  :measurement => "web.view.time", :value => event.payload[:view_runtime]
-        ActiveSupport::Notifications.instrument :performance, :tags => tags,  :measurement => "request.status.#{status}"
+        ActiveSupport::Notifications.instrument :performance, action: :timing, tags: tags, measurement: "request.total_duration", value: event.duration
+        ActiveSupport::Notifications.instrument :performance, action: :timing, tags: tags,  measurement: "database.query.time", value: event.payload[:db_runtime]
+        ActiveSupport::Notifications.instrument :performance, action: :timing, tags: tags,  measurement: "web.view.time", value: event.payload[:view_runtime]
+        ActiveSupport::Notifications.instrument :performance, tags: tags,  measurement: "request.status.#{status}"
       end
 
       ActiveSupport::Notifications.subscribe /performance/ do |name, start, finish, id, payload|
         send_event_to_statsd(name, payload) if Datadoge.configuration.environments.include?(Rails.env)
       end
+      
+
+      ActiveSupport::Notifications.subscribe /sql.active_record/ do |*args|
+        event = ActiveSupport::Notifications::Event.new(*args)
+        
+        duration = event.duration
+        sql = "sql:#{event.payload[:sql]}"
+        binds = "binds:#{event.payload[:binds]}"
+        name = "name:#{event.payload[:name]}"
+        connection_id = "connection_id:#{event.payload[:connection_id]}"
+
+        hostname = `hostname`.strip
+        host = "host:#{hostname}"
+        tags = [sql, binds, name, host]
+        ActiveSupport::Notifications.instrument :performance, action: :timing, tags: tags, measurement: "database.query.duration", value: event.duration
+        ActiveSupport::Notifications.instrument :performance, action: :timing, tags: tags,  measurement: "database.query", value: event.payload[:sql]
+        ActiveSupport::Notifications.instrument :performance, action: :timing, tags: tags,  measurement: "database.query.variables", value: event.payload[:binds]
+      end
+
+      ActiveSupport::Notifications.subscribe /performance/ do |name, start, finish, id, payload|
+        send_event_to_statsd(name, payload) if Datadoge.configuration.environments.include?(Rails.env)
+      end
+
 
       def send_event_to_statsd(name, payload)
         action = payload[:action] || :increment
@@ -39,9 +62,9 @@ module Datadoge
         tags = payload[:tags]
         key_name = "#{name.to_s.capitalize}.#{measurement}"
         if action == :increment
-          $statsd.increment key_name, :tags => tags
+          $statsd.increment key_name, tags: tags
         else
-          $statsd.histogram key_name, value, :tags => tags
+          $statsd.histogram key_name, value, tags: tags
         end
       end
     end
